@@ -1,16 +1,18 @@
 /** 
  * \class UI
  */
+#define PDC_BUILD_DLL
 
 #include "UI.h"
 #include "Projector.h"
 
 #include <cstdlib>
-#include <ncurses.h>
+#include <curses.h>
 #include <string>
 
 using namespace std;
-
+#pragma comment(lib, "ws2_32.lib")
+#pragma comment(lib, "pdcurses.lib")
 #define KEY_ESC         (27)
 
 
@@ -37,6 +39,7 @@ UI::UI(const UI &orig) {
 }
 
 const UI &UI::operator=(const UI &orig) {
+	return *this;
 }
 
 void UI::initialize() {
@@ -120,6 +123,7 @@ void UI::initialize() {
     _consoleHeight = getmaxy(_console);
     
     this->refresh();
+	_projector->listen();
     doUserInput();
 }
 
