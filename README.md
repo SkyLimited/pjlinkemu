@@ -1,6 +1,6 @@
 # PJLink Emulator
 
-Emulates a PJLink projector connected via TCP/IP, fork from amclain/pjlinkemu adopted for Win32 platform.
+Emulates a PJLink projector connected via TCP/IP, fork from amclain/pjlinkemu adopted for Win32 platform, using PDCurses.
 Also emulates some action's like muting sound and shutdown the screen through WinAPI
 
 
