@@ -5,10 +5,6 @@ Also emulates some action's like muting sound and shutdown the screen through Wi
 
 
 
-## Documentation
-
-[https://sourceforge.net/p/pjlinkemu/wiki/Home/](https://sourceforge.net/p/pjlinkemu/wiki/Home/)
-
 
 ## HOTKEYS
     
