@@ -12,7 +12,18 @@
 #include <string>
 #include <thread>
 
-#include <netinet/in.h>
+#include <Winsock2.h>
+#include <WS2tcpip.h>
+
+#define bzero(b,len) (memset((b), '\0', (len)), (void) 0)  
+#define SHUT_RDWR 0x02
+
+#if defined(_MSC_VER)
+#include <BaseTsd.h>
+typedef SSIZE_T ssize_t;
+#endif
+
+
 
 class UI;
 
@@ -123,7 +134,10 @@ private:
      * projector can accept another connection.
      */
     bool _emulateHangOpenBug;
-    
+
+	float volumeLevel;
+
+
     // PJLink Variables
     bool _PJLinkUseAuthentication;
     
