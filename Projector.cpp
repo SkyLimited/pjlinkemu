@@ -1,9 +1,9 @@
 /** 
  * \class Projector
  */
-
+#define _CRT_SECURE_NO_WARNINGS 
 #include "Projector.h"
-
+#include <io.h>
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
@@ -11,14 +11,17 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <fstream>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <regex.h>
-#include <sys/socket.h>
+#include <Winsock2.h>
+#include <mmdeviceapi.h>
+#include <endpointvolume.h>
+//#include <netinet/tcp.h>
+#include <regex>
+//#include <sys/socket.h>
 #include <time.h>
-#include <unistd.h>
+//#include <unistd.h>
 
 #include "UI.h"
+#pragma comment(lib, "Winmm.lib")
 
 using namespace std;
 
@@ -35,7 +38,7 @@ Projector::Projector() {
     _emulateHangOpenBug = false;
     _PJLinkUseAuthentication = false;
     
-    _PJLinkPower = POWER_OFF;
+    _PJLinkPower = POWER_ON;
     _PJLinkInput = 11;
     _PJLinkAVMute = 30;
     _PJLinkError = 0;
@@ -70,6 +73,7 @@ Projector::Projector(const Projector &orig) {
 }
 
 const Projector &Projector::operator=(const Projector &orig) {
+	return *this;
 }
 
 int Projector::getPort() {
@@ -136,8 +140,8 @@ void Projector::close() {
     ::shutdown(_serverfd, SHUT_RDWR);
     
     // TODO: Null checks.
-    fclose(_sin);
-    fclose(_sout);
+   /* fclose(_sin);
+    fclose(_sout);*/
     
     _socketListener->join();
     delete _socketListener;
@@ -157,17 +161,37 @@ void Projector::listen() {
 }
 
 void Projector::listen(int port) {
-    if (_isListening == true) return;
     
+	
+	if (_isListening == true) return;
+    
+	WORD wVersionRequested;
+	WSADATA wsaData;
+	int err;
+
+	/* Use the MAKEWORD(lowbyte, highbyte) macro declared in Windef.h */
+	wVersionRequested = MAKEWORD(2, 2);
+
+	err = WSAStartup(wVersionRequested, &wsaData);
+	if (err != 0) {
+		/* Tell the user that we could not find a usable */
+		/* Winsock DLL.                                  */
+		_ui->print("WSAStartup failed with error: "+ std::to_string(err));
+		
+	}
+
+
     _port = port;
     
     _serveraddr.sin_family = AF_INET;
     _serveraddr.sin_addr.s_addr = htonl(INADDR_ANY);
     _serveraddr.sin_port = htons(_port);
-    
+
+	
     _serverfd = socket(AF_INET, SOCK_STREAM, 0);
     if (_serverfd < 0) {
-        _ui->print("Failed to create socket.");
+		int sockerr =  WSAGetLastError();
+        _ui->print("Err: "+ std::to_string(sockerr));
         return;
     }
     
@@ -200,9 +224,10 @@ void Projector::accept() {
     // TODO: Implement poll and yield thread.
     
     // Only accept one connection.
+	_clientlen = sizeof(sockaddr_in);
     _clientfd = ::accept(_serverfd, (sockaddr *) &_clientaddr, &_clientlen);
     if (_clientfd < 0) {
-        if (_isListening == true) _ui->print("Failed to accept client."); // If _isListening is false, user closed the socket listener.
+        if (_isListening == true) _ui->print("Failed to accept client.: "+ std::to_string(WSAGetLastError())); // If _isListening is false, user closed the socket listener.
         _ui->refresh();
         return;
     }
@@ -224,33 +249,44 @@ void Projector::accept() {
         _ui->print("Client connected. " + hour + ":" + minute + ":" + second);
         
         // Configure client socket to blocking.
-        int sflags = fcntl(_clientfd, F_GETFL, 0);
-        fcntl(_clientfd, F_SETFL, sflags & ~O_NONBLOCK);
-        
+       /* int sflags = fcntl(_clientfd, F_GETFL, 0);
+        fcntl(_clientfd, F_SETFL, sflags & ~O_NONBLOCK);*/
+		int iResult;
+		u_long iMode = 0;
+		iResult = ioctlsocket(_clientfd, FIONBIO, &iMode);
+
+
         // Set TCP_NODELAY
         int tcpVal = 1;
-        setsockopt(_clientfd, IPPROTO_TCP, TCP_NODELAY, &tcpVal, sizeof (int));
+        setsockopt(_clientfd, IPPROTO_TCP, TCP_NODELAY, (char*)&tcpVal, sizeof (int));
         
-        _sin = fdopen(_clientfd, "r");
-        _sout = fdopen(_clientfd, "w");
+
+
+       /* _sin = _fdopen(_clientfd, "r");
+        _sout = _fdopen(_clientfd, "w");*/
+
+		
         
         // Set the fd buffers to line buffered (default is fully buffered).
-        setvbuf(_sin, NULL, _IONBF, -1);
-        setvbuf(_sout, NULL, _IOLBF, -1);
+    /*   setvbuf(_sin, NULL, _IONBF, -1);
+        setvbuf(_sout, NULL, _IOLBF, -1);*/
         
         _isConnected = true;
         
         resetSocketTimeout();
         
         // Acknowledge client connection.
-        string greeting = "PJLINK 0";
+        string greeting = "PJLINK 0\r\n";
         
         if (_PJLinkUseAuthentication == true) {
             // TODO: Implement PJLink connection challenge.
             //       PJLink spec p23.
         }
-        fprintf(_sout, "%s\r\n", greeting.c_str());
-        fflush(_sout);
+		DWORD bytesWritten;
+		send(_clientfd, greeting.c_str(), greeting.length(), 0);
+		//WriteFile((HANDLE)_clientfd, greeting.c_str(), greeting.length(), &bytesWritten, NULL);
+        /*fprintf(_sout, "%s\r\n", greeting.c_str());
+        fflush(_sout);*/
         
         _ui->print("> " + greeting);
         
@@ -262,16 +298,18 @@ void Projector::accept() {
 
 void Projector::doRead() {
     if (_isConnected == false) return;
-    if (_sin == NULL) return;
+//    if (_sin == NULL) return;
     
     // Read command.
     char rbuf[1024]; // Read buffer.
     bzero (rbuf, sizeof(rbuf));
-    
+	DWORD bytesWritten;
     // TODO: Implement poll and yield thread.
     
-    ssize_t readResult = read(_clientfd, rbuf, sizeof(rbuf));
-    if (readResult <= -1) {
+	int readResult = recv(_clientfd, rbuf, sizeof(rbuf), 0);
+
+    //ssize_t readResult = _read(_clientfd, rbuf, sizeof(rbuf));
+    if (readResult<=-1) {
         // Read error.
         _isConnected = false;
         _ui->print("Read error.");
@@ -290,21 +328,26 @@ void Projector::doRead() {
     string received(rbuf);
     
     // Check for command and parameter.
-    regex_t regex;
+	regex pjlinkCmdRegex("%1(\\w+)\\ (\\?|[0-9]+)\\r?\\n?");
+	
+	//regex_t regex;
     int result = 0;
     size_t nmatches = 3;
-    regmatch_t pmatch[3];
+   // regmatch_t pmatch[3];
     
-    result = regcomp(&regex, "%1(\\w+)\\ (\\?|[0-9]+)\\r?\\n?", REG_EXTENDED);
+    /*result = regcomp(&regex, "%1(\\w+)\\ (\\?|[0-9]+)\\r?\\n?", REG_EXTENDED);
     if (result != 0) {
         _ui->print("Error compiling regex.");
     }
     else {
         result = regexec(&regex, received.c_str(), nmatches, pmatch, REG_EXTENDED);
-    }
-    
-    string command = (result == 0 && pmatch[1].rm_so >= 0) ? received.substr(pmatch[1].rm_so, pmatch[1].rm_eo - pmatch[1].rm_so) : "";
-    string value = (result == 0 && pmatch[2].rm_so >= 0) ? received.substr(pmatch[2].rm_so, pmatch[2].rm_eo - pmatch[2].rm_so) : "";
+    }*/
+	smatch pmatch;
+	bool found = regex_match(received.cbegin(), received.cend(),pmatch, pjlinkCmdRegex);
+	
+
+    string command = (found ) ? pmatch.str(1) : "";
+    string value = (found) ? pmatch.str(2) : "";
     
     // DEBUG ////////////////////////////////////////////////////////////////////////////////
     // Change this to the entire received string minus line terminators.
@@ -315,10 +358,14 @@ void Projector::doRead() {
     if (command == "POWR") {
         if (value == "1") {
             _PJLinkPower = POWER_ON;
+			mouse_event(0x0001, 0, 1, 0, NULL);
+			Sleep(40);
+			mouse_event(0x0001, 0, -1, 0, NULL);
             response = "%1POWR=OK";
         }
         else if (value == "0") {
             _PJLinkPower = POWER_OFF;
+			PostMessage(HWND_BROADCAST, WM_SYSCOMMAND, SC_MONITORPOWER, 2);
             response = "%1POWR=OK";
         }
         // Power query.
@@ -332,8 +379,9 @@ void Projector::doRead() {
     }
     
     else if (command == "INPT") {
+		response = "%1INPT=ERR2";
         if (value == "?") {
-            response = "%1INPT=" + to_string(_PJLinkInput);
+            response = "%1INPT=11";
         }
         else if (value == "") {
             response = "%1INPT=ERR2";
@@ -342,7 +390,7 @@ void Projector::doRead() {
             int inputValue = stoi(value);
             response = "%1INPT=OK";
             
-            if (inputValue >= 11 && inputValue <= 59) {
+            if (inputValue == 11) {
                 _PJLinkInput = inputValue;
             }
             else {
@@ -354,7 +402,41 @@ void Projector::doRead() {
     
     else if (command == "AVMT") {
         if (value == "?") {
-            response = "%1AVMT=" + to_string(_PJLinkAVMute);
+			HRESULT coi = CoInitialize(NULL);
+			BOOL isMuted = false;
+			if (coi == S_OK || coi == S_FALSE) {
+				IMMDeviceEnumerator* deviceEnumerator = NULL;
+				HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)& deviceEnumerator);
+				if (hr == S_OK)
+				{
+
+					IMMDevice* defaultDevice = NULL;
+
+					hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+					if (hr == S_OK) {
+						deviceEnumerator->Release();
+					}
+					deviceEnumerator = NULL;
+
+					IAudioEndpointVolume* endpointVolume = NULL;
+					hr = defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)& endpointVolume);
+					if (hr == S_OK) {
+						defaultDevice->Release();
+						defaultDevice = NULL;
+
+						endpointVolume->GetMute(&isMuted);
+						endpointVolume->Release();
+					}
+				}
+				CoUninitialize();
+			}
+			if(isMuted)
+				_PJLinkAVMute = (int)AVMUTE_AUDIO;
+			else 
+				_PJLinkAVMute = (int)AVMUTE_NONE;
+			
+			
+			response = "%1AVMT=" + to_string(_PJLinkAVMute);
         }
         else if (value == "") {
             response = "%1AVMT=ERR2";
@@ -364,30 +446,93 @@ void Projector::doRead() {
             response = "%1AVMT=OK";
             
             switch (avmtValue) {
-                case AVMUTE_VIDEO:
+                /*case AVMUTE_VIDEO:
                     _PJLinkAVMute = (_PJLinkAVMute == AVMUTE_AUDIO) ?  (int) AVMUTE_BOTH : (int) AVMUTE_VIDEO;
+
                     break;
 
                 case AVMUTE_UNMUTE_VIDEO:
                     _PJLinkAVMute = (_PJLinkAVMute == AVMUTE_BOTH) ? (int) AVMUTE_AUDIO : (int) AVMUTE_NONE;
-                    break;
+                    break;*/
                     
-                case AVMUTE_AUDIO:
-                    _PJLinkAVMute = (_PJLinkAVMute == AVMUTE_VIDEO) ? (int) AVMUTE_BOTH : (int) AVMUTE_AUDIO;
-                    break;
-                    
-                case AVMUTE_UNMUTE_AUDIO:
-                    _PJLinkAVMute = (_PJLinkAVMute == AVMUTE_BOTH) ? (int) AVMUTE_VIDEO : (int) AVMUTE_NONE;
-                    break;
-                    
-                case AVMUTE_BOTH:
-                    _PJLinkAVMute = AVMUTE_BOTH;
-                    break;
-                    
-                case AVMUTE_UNMUTE_BOTH:
-                    _PJLinkAVMute = AVMUTE_NONE;
-                    break;
+				case AVMUTE_AUDIO: AVMUTE_BOTH: AVMUTE_VIDEO:
+				{
+					_PJLinkAVMute = (_PJLinkAVMute == AVMUTE_VIDEO) ? (int)AVMUTE_BOTH : (int)AVMUTE_AUDIO;
+					HRESULT coi = CoInitialize(NULL);
+					if (coi == S_OK || coi == S_FALSE) {
+						IMMDeviceEnumerator* deviceEnumerator = NULL;
+						HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)& deviceEnumerator);
+						if (hr == S_OK)
+						{
 
+							IMMDevice* defaultDevice = NULL;
+
+							hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+							if (hr == S_OK) {
+								deviceEnumerator->Release();
+							}
+							deviceEnumerator = NULL;
+
+							IAudioEndpointVolume* endpointVolume = NULL;
+							hr = defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)& endpointVolume);
+							if (hr == S_OK) {
+								defaultDevice->Release();
+								defaultDevice = NULL;
+
+								endpointVolume->SetMute(TRUE, NULL);
+								endpointVolume->Release();
+							}
+						}
+						CoUninitialize();
+					}					
+					break;
+				}
+                    
+				case AVMUTE_UNMUTE_AUDIO: AVMUTE_UNMUTE_VIDEO: AVMUTE_UNMUTE_BOTH: {
+					_PJLinkAVMute = (_PJLinkAVMute == AVMUTE_BOTH) ? (int)AVMUTE_VIDEO : (int)AVMUTE_NONE;
+					HRESULT coi = CoInitialize(NULL);
+					if (coi == S_OK || coi == S_FALSE) {
+						IMMDeviceEnumerator* deviceEnumerator = NULL;
+						HRESULT hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), NULL, CLSCTX_INPROC_SERVER, __uuidof(IMMDeviceEnumerator), (LPVOID*)& deviceEnumerator);
+						if (hr == S_OK)
+						{
+
+							IMMDevice* defaultDevice = NULL;
+
+							hr = deviceEnumerator->GetDefaultAudioEndpoint(eRender, eConsole, &defaultDevice);
+							if (hr == S_OK) {
+								deviceEnumerator->Release();
+							}
+							deviceEnumerator = NULL;
+
+							IAudioEndpointVolume* endpointVolume = NULL;
+							hr = defaultDevice->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_INPROC_SERVER, NULL, (LPVOID*)& endpointVolume);
+							if (hr == S_OK) {
+								defaultDevice->Release();
+								defaultDevice = NULL;
+
+								endpointVolume->SetMute(FALSE, NULL);
+								endpointVolume->Release();
+							}
+						}
+						CoUninitialize();
+					}
+					break;
+				}
+               /* case AVMUTE_BOTH:
+                    _PJLinkAVMute = AVMUTE_BOTH;
+					/*waveOutGetVolume(
+						NULL,
+						&this->volumeLevel
+					);
+					waveOutSetVolume(NULL, 0);
+                    break;*/
+                    
+                /*case AVMUTE_UNMUTE_BOTH:
+                    _PJLinkAVMute = AVMUTE_NONE;
+					//waveOutSetVolume(NULL, this->volumeLevel);
+                    break;
+					*/
                 default:
                     response = "%1AVMT=ERR2";
                     break;
@@ -410,13 +555,42 @@ void Projector::doRead() {
     
     else if (command == "NAME") {
         if (value == "?") {
-            response = "%1NAME=" + _PJLinkName;
+			response = "%1NAME=USENDA LTI5518H";
         }
     }
+	else if (command == "INFO") {
+	if (value == "?") {
+		response = "%1INFO=USENDA LTI5518H";
+		}
+	}
+	else if (command == "INF1") {
+	if (value == "?") {
+		response = "%1INF1=USENDA";
+	}
+	}
+	else if (command == "INF2") {
+	if (value == "?") {
+		response = "%1INF2=LTI5518H";
+	}
+	}
+	else if (command == "CLSS") {
+	if (value == "?") {
+		response = "%1CLSS=1";
+	}
+	}
+	else if (command == "INST") {
+	if (value == "?") {
+		response = "%1INST=11";
+	}
+	}
+	response += "\r\n";
+	
+   /* fprintf(_sout, "%s\r\n", response.c_str());
+    fflush(_sout);*/
     
-    fprintf(_sout, "%s\r\n", response.c_str());
-    fflush(_sout);
-    
+	//DWORD bytesWritten;
+	//WriteFile((HANDLE)_clientfd, response.c_str(), response.length(), &bytesWritten, NULL);
+	send(_clientfd, response.c_str(), response.length(), 0);
     _ui->print("> " + response);
     
     _ui->refresh();
